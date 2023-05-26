@@ -148,6 +148,16 @@ pub mod pallet {
 			// - Insert this metadata in the Metadata storage, under the asset_id key.
 			// - Deposit a `MetadataSet` event.
 
+			let asset_metadata = AssetMetadata::new(name.clone(), symbol.clone());
+
+			Metadata::<T>::insert(asset_id, asset_metadata);
+
+			Self::deposit_event(Event::MetadataSet {
+				asset_id,
+				name,
+				symbol,
+			});
+
 			Ok(())
 		}
 
@@ -162,7 +172,11 @@ pub mod pallet {
 			// - Ensure the extrinsic origin is a signed transaction.
 			// - Ensure the caller is the asset owner.
 
+			let origin = ensure_signed(origin)?;
+			Self::ensure_is_owner(asset_id, origin)?;
+
 			let mut minted_amount = 0;
+			let mut total_supply = 0;
 
 			Asset::<T>::try_mutate(asset_id, |maybe_details| -> DispatchResult {
 				let details = maybe_details.as_mut().ok_or(Error::<T>::UnknownAssetId)?;
@@ -170,6 +184,8 @@ pub mod pallet {
 				let old_supply = details.supply;
 				details.supply = details.supply.saturating_add(amount);
 				minted_amount = details.supply - old_supply;
+
+				total_supply = details.supply;
 
 				Ok(())
 			})?;
@@ -179,6 +195,11 @@ pub mod pallet {
 			});
 
 			// TODO: Deposit a `Minted` event.
+			Self::deposit_event(Event::Minted {
+				asset_id,
+				owner: to,
+				total_supply,
+			});
 
 			Ok(())
 		}
@@ -190,6 +211,37 @@ pub mod pallet {
 			// - Mutate the total supply.
 			// - Mutate the account balance.
 			// - Emit a `Burned` event.
+
+			// - Ensure the extrinsic origin is a signed transaction.
+			let who = ensure_signed(origin)?;
+
+			let mut total_supply = 0;
+
+			// - Mutate the total supply.
+			Asset::<T>::try_mutate(asset_id, |maybe_details| -> DispatchResult {
+				let details = maybe_details.as_mut().ok_or(Error::<T>::UnknownAssetId)?;
+
+				let mut burned_amount = 0;
+
+				// - Mutate the account balance.
+				Account::<T>::mutate(asset_id, who.clone(), |balance| {
+					let old_balance = *balance;
+					*balance = balance.saturating_sub(amount);
+					burned_amount = old_balance - *balance;
+				});
+
+				details.supply -= burned_amount;
+				total_supply = details.supply;
+
+				Ok(())
+			})?;
+
+			// - Emit a `Burned` event.
+			Self::deposit_event(Event::Burned {
+				asset_id,
+				owner: who,
+				total_supply,
+			});
 
 			Ok(())
 		}
@@ -205,6 +257,29 @@ pub mod pallet {
 			// - Ensure the extrinsic origin is a signed transaction.
 			// - Mutate both account balances.
 			// - Emit a `Transferred` event.
+
+			let who = ensure_signed(origin)?;
+
+			ensure!(Self::asset(asset_id).is_some(), Error::<T>::UnknownAssetId);
+
+			let mut transferred_amount = 0;
+
+			Account::<T>::mutate(asset_id, who.clone(), |balance| {
+				let old_balance = *balance;
+				*balance = balance.saturating_sub(amount);
+				transferred_amount = old_balance - *balance;
+			});
+
+			Account::<T>::mutate(asset_id, to.clone(), |balance| {
+				*balance = balance.saturating_add(transferred_amount);
+			});
+
+			Self::deposit_event(Event::Transferred {
+				asset_id,
+				from: who,
+				to,
+				amount,
+			});
 
 			Ok(())
 		}
